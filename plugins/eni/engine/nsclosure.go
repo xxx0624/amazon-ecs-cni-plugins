@@ -19,6 +19,7 @@ import (
 	"syscall"
 
 	"github.com/aws/amazon-ecs-cni-plugins/pkg/netlinkwrapper"
+	log "github.com/cihub/seelog"
 	"github.com/containernetworking/cni/pkg/ns"
 	"github.com/pkg/errors"
 	"github.com/vishvananda/netlink"
@@ -27,7 +28,7 @@ import (
 var (
 	// InstanceMetadataEndpoints is the list of EC2 instance metadata endpoints.
 	InstanceMetadataEndpoints = []string{"169.254.169.254/32", "fd00:ec2::254/128"}
-	linkWithMACNotFoundError = errors.New("engine: device with mac address not found")
+	linkWithMACNotFoundError  = errors.New("engine: device with mac address not found")
 )
 
 // setupNamespaceClosureContext wraps the parameters and the method to configure the container's namespace
@@ -123,6 +124,7 @@ func (closureContext *setupNamespaceClosureContext) run(_ ns.NetNS) error {
 
 	// Add IP addresses to the link
 	for _, addr := range closureContext.ipAddrs {
+		log.Infof("adding the ip addr: %v", addr)
 		err = closureContext.netLink.AddrAdd(eniLink, addr)
 		if err != nil {
 			return errors.Wrap(err,
@@ -132,6 +134,7 @@ func (closureContext *setupNamespaceClosureContext) run(_ ns.NetNS) error {
 
 	// Bring it up
 	err = closureContext.netLink.LinkSetUp(eniLink)
+	log.Infof("eniLink: %v", eniLink)
 	if err != nil {
 		return errors.Wrap(err,
 			"setupNamespaceClosure engine: unable to bring up the device")
@@ -147,23 +150,48 @@ func (closureContext *setupNamespaceClosureContext) run(_ ns.NetNS) error {
 
 	// Add a blackhole route for IMDS endpoint if required
 	if closureContext.blockIMDS {
-                for _, ep := range InstanceMetadataEndpoints {
-                        _, imdsNetwork, err := net.ParseCIDR(ep)
-                        if err != nil {
-                                // This should never happen as these IP addresses are hardcoded.
-                                return errors.Wrapf(err, "setupNamespaceClosure engine: unable to parse instance metadata endpoint")
-                        }
-                        if err = closureContext.netLink.RouteAdd(&netlink.Route{
-                                Dst:  imdsNetwork,
-                                Type: syscall.RTN_BLACKHOLE,
-                        }); err != nil {
-                                return errors.Wrapf(err, "setupNamespaceClosure engine: unable to add route to block instance metadata")
-                        }
-                }
+		for _, ep := range InstanceMetadataEndpoints {
+			_, imdsNetwork, err := net.ParseCIDR(ep)
+			if err != nil {
+				// This should never happen as these IP addresses are hardcoded.
+				return errors.Wrapf(err, "setupNamespaceClosure engine: unable to parse instance metadata endpoint")
+			}
+			if err = closureContext.netLink.RouteAdd(&netlink.Route{
+				Dst:  imdsNetwork,
+				Type: syscall.RTN_BLACKHOLE,
+			}); err != nil {
+				return errors.Wrapf(err, "setupNamespaceClosure engine: unable to add route to block instance metadata")
+			}
+		}
+	}
+
+	// ip addr show
+	allAddrs, err := closureContext.netLink.AddrList(eniLink, netlink.FAMILY_V4)
+	log.Infof("listing ip v4 addr err: %v", err)
+	for _, addr := range allAddrs {
+		log.Infof("listing ip v4 addr: %v", addr)
+	}
+	allAddrs, err = closureContext.netLink.AddrList(eniLink, netlink.FAMILY_V6)
+	log.Infof("listing ip v6 addr err: %v", err)
+	for _, addr := range allAddrs {
+		log.Infof("listing ip v6 addr: %v", addr)
+	}
+
+	// ip route show
+	allRoutes, err := closureContext.netLink.RouteList(eniLink, netlink.FAMILY_V4)
+	log.Infof("listing ip v4 route err: %v", err)
+	for _, addr := range allRoutes {
+		log.Infof("listing ip v4 route: %v", addr)
+	}
+	allRoutes, err = closureContext.netLink.RouteList(eniLink, netlink.FAMILY_V6)
+	log.Infof("listing ip v6 route err: %v", err)
+	for _, addr := range allRoutes {
+		log.Infof("listing ip v6 route: %v", addr)
 	}
 
 	// Setup IP routes for the gateways
 	for _, gwAddr := range closureContext.gatewayAddrs {
+		log.Infof("gwAddr: %v", gwAddr)
 		err = closureContext.netLink.RouteAdd(&netlink.Route{
 			LinkIndex: eniLink.Attrs().Index,
 			Gw:        gwAddr,
@@ -172,6 +200,18 @@ func (closureContext *setupNamespaceClosureContext) run(_ ns.NetNS) error {
 			return errors.Wrap(err,
 				"setupNamespaceClosure engine: unable to add the route for the gateway")
 		}
+	}
+
+	// ip route show
+	allRoutes, err = closureContext.netLink.RouteList(eniLink, netlink.FAMILY_V4)
+	log.Infof("[gw updated] listing ip v4 route err: %v", err)
+	for _, addr := range allRoutes {
+		log.Infof("[gw updated] listing ip v4 route: %v", addr)
+	}
+	allRoutes, err = closureContext.netLink.RouteList(eniLink, netlink.FAMILY_V6)
+	log.Infof("[gw updated] listing ip v6 route err: %v", err)
+	for _, addr := range allRoutes {
+		log.Infof("[gw updated] listing ip v6 route: %v", addr)
 	}
 
 	return nil
